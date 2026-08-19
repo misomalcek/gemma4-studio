@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Gemma 4 Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .thought-block { background: #2d3748; border-left: 4px solid #718096; font-style: italic; color: #a0aec0; }
+        .code-block { background: #1a202c; color: #f6ad55; font-family: monospace; border: 1px solid #4a5568; }
+        .result-block { background: #1a202c; color: #68d391; font-family: monospace; border: 1px solid #4a5568; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 flex h-screen">
+
+    <!-- Settings Sidebar -->
+    <div class="w-80 bg-gray-800 p-6 border-r border-gray-700 flex flex-col gap-6">
+        <h1 class="text-2xl font-bold text-blue-400">Gemma 4</h1>
+        
+        <div>
+            <label class="block text-xs font-semibold uppercase text-gray-400 mb-2">Model</label>
+            <select id="model" class="w-full bg-gray-700 p-2 rounded border border-gray-600">
+                <option value="gemma-4-31b-it">Gemma 4 31B (Dense)</option>
+                <option value="gemma-4-26b-a4b-it">Gemma 4 26B (MoE)</option>
+            </select>
+        </div>
+
+        <div>
+            <label class="block text-xs font-semibold uppercase text-gray-400 mb-2">Thinking Level</label>
+            <select id="thinking" class="w-full bg-gray-700 p-2 rounded border border-gray-600">
+                <option value="HIGH">High (Deep Reasoning)</option>
+                <option value="MEDIUM" selected>Medium (Balanced)</option>
+                <option value="LOW">Low (Fast)</option>
+                <option value="MINIMAL">Minimal (Direct)</option>
+            </select>
+        </div>
+
+        <div class="flex flex-col gap-3">
+            <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" id="useSearch" checked> <span>Google Search Grounding</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" id="useCode" checked> <span>Code Execution</span>
+            </label>
+        </div>
+
+        <div>
+            <label class="block text-xs font-semibold uppercase text-gray-400 mb-2">Temperature</label>
+            <input id="temp" type="range" min="0" max="2" step="0.1" value="0.7" class="w-full">
+            <div class="text-center text-sm" id="tempVal">0.7</div>
+        </div>
+    </div>
+
+    <!-- Chat Interface -->
+    <div class="flex-1 flex flex-col">
+        <div id="chat-window" class="flex-1 overflow-y-auto p-6 space-y-6"></div>
+        
+        <div class="p-6 bg-gray-900 border-t border-gray-700">
+            <div class="max-w-4xl mx-auto flex gap-4">
+                <input id="userInput" type="text" placeholder="Ask Gemma 4..." class="flex-1 bg-gray-800 p-3 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500">
+                <button onclick="sendMessage()" class="bg-blue-600 px-6 py-2 rounded-lg font-bold hover:bg-blue-500 transition">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let history = [];
+        const tempInput = document.getElementById('temp');
+        tempInput.oninput = () => document.getElementById('tempVal').innerText = tempInput.value;
+
+        async function sendMessage() {
+            const input = document.getElementById('userInput');
+            const window = document.getElementById('chat-window');
+            const text = input.value;
+            if(!text) return;
+
+            // Add user message
+            window.innerHTML += `<div class="flex justify-end"><div class="bg-blue-700 p-3 rounded-lg max-w-2xl">${text}</div></div>`;
+            input.value = '';
+
+            // Create AI message container
+            const aiMsgDiv = document.createElement('div');
+            aiMsgDiv.className = "flex justify-start";
+            const contentDiv = document.createElement('div');
+            contentDiv.className = "max-w-2xl space-y-2";
+            aiMsgDiv.appendChild(contentDiv);
+            window.appendChild(aiMsgDiv);
+
+            const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: text,
+                    history: history,
+                    modelName: document.getElementById('model').value,
+                    thinkingLevel: document.getElementById('thinking').value,
+                    useSearch: document.getElementById('useSearch').checked,
+                    useCode: document.getElementById('useCode').checked,
+                    temperature: tempInput.value
+                })
+            });
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let currentPart = null;
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\n');
+                
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const dataStr = line.slice(6);
+                        if (dataStr === '[DONE]') break;
+                        try {
+                            const data = JSON.parse(dataStr);
+                            appendPart(contentDiv, data);
+                        } catch (e) {}
+                    }
+                }
+            }
+
+            history.push({ role: 'user', parts: [{ text }] });
+            // Simplified: adding full response to history would require accumulating the stream
+            window.scrollTop = window.scrollHeight;
+        }
+
+        function appendPart(container, data) {
+            let el;
+            if (data.type === 'thought') {
+                el = document.createElement('div');
+                el.className = "thought-block p-2 rounded text-sm";
+                el.innerText = "Thinking: " + data.content;
+            } else if (data.type === 'code') {
+                el = document.createElement('div');
+                el.className = "code-block p-2 rounded text-sm";
+                el.innerText = "Code: " + data.content;
+            } else if (data.type === 'result') {
+                el = document.createElement('div');
+                el.className = "result-block p-2 rounded text-sm";
+                el.innerText = "Execution Result: " + data.content;
+            } else {
+                el = document.createElement('div');
+                el.className = "bg-gray-800 p-3 rounded-lg";
+                el.innerText = data.content;
+            }
+            container.appendChild(el);
+            document.getElementById('chat-window').scrollTop = document.getElementById('chat-window').scrollHeight;
+        }
+    </script>
+</body>
+</html>
